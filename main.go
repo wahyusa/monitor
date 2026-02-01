@@ -295,3 +295,4 @@ func main() {
 
 	// REMOVED: t1.Toggle() so it doesn't auto-start
 	myWindow.ShowAndRun()
+}
