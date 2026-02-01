@@ -27,6 +27,8 @@ jobs:
       # 4. Run the Cross Compilation
       # This pulls the Docker image and builds the .exe
       - name: Build for Windows
+        env:
+            GOTOOLCHAIN: "1.25" 
         run: fyne-cross windows -arch=amd64 -name TengokWaktuLah -app-id com.yourdomain.tengokwaktulah .
 
       # 5. Upload the Result
