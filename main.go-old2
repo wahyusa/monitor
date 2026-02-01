@@ -9,21 +9,21 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 )
 
-// --- WINDOWS API SETUP (Unchanged) ---
+// --- WINDOWS API SETUP ---
 var (
 	modkernel32 = syscall.NewLazyDLL("kernel32.dll")
-	moduser32   = syscall.NewLazyDLL("user32.dll")
+	moduser32   = syscall.NewLazyDLL("user32.dll") // Loaded User32 for window management
 
 	procGetSystemPowerStatus = modkernel32.NewProc("GetSystemPowerStatus")
 	procFindWindowW          = moduser32.NewProc("FindWindowW")
 	procSetWindowPos         = moduser32.NewProc("SetWindowPos")
 )
 
+// Battery Structure
 type SYSTEM_POWER_STATUS struct {
 	ACLineStatus        byte
 	BatteryFlag         byte
@@ -48,26 +48,34 @@ func getWindowsBattery() string {
 	return fmt.Sprintf("Bat: %d%%%s", status.BatteryLifePercent, charging)
 }
 
+// Function to force window "Always On Top" using Windows API
 func setAlwaysOnTop(title string) {
+	// We retry for a few seconds because the window needs time to "appear" in Windows OS
 	for i := 0; i < 20; i++ {
 		time.Sleep(200 * time.Millisecond)
+
+		// Convert string to Windows UTF-16 pointer
 		titlePtr, _ := syscall.UTF16PtrFromString(title)
+
+		// Find window by Title
 		hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
 
 		if hwnd != 0 {
+			// Found it! Now set it to TOPMOST
+			// HWND_TOPMOST = -1 (represented as all 1s in uintptr)
+			// SWP_NOMOVE | SWP_NOSIZE = 0x0003
 			hwndTopMost := uintptr(^uintptr(0))
 			procSetWindowPos.Call(hwnd, hwndTopMost, 0, 0, 0, 0, 0x0003)
 			return
 		}
 	}
+	fmt.Println("Could not find window to set on top.")
 }
 
 // --- STOPWATCH LOGIC ---
 type Task struct {
-	Name *widget.Entry
-	// We replace the direct Label with a Data Binding
-	TimeData binding.String
-
+	Name        *widget.Entry
+	Timer       *widget.Label
 	BtnStart    *widget.Button
 	BtnReset    *widget.Button
 	StartTime   time.Time
@@ -86,10 +94,7 @@ func (t *Task) UpdateLabel() {
 	h := int(total.Hours())
 	m := int(total.Minutes()) % 60
 	s := int(total.Seconds()) % 60
-
-	// FIX: Update the data binding, NOT the widget directly
-	// This is thread-safe
-	t.TimeData.Set(fmt.Sprintf("%02d:%02d:%02d", h, m, s))
+	t.Timer.SetText(fmt.Sprintf("%02d:%02d:%02d", h, m, s))
 }
 
 func (t *Task) Toggle() {
@@ -127,30 +132,22 @@ func (t *Task) Reset() {
 		t.Toggle()
 	}
 	t.Accumulated = 0
-	t.TimeData.Set("00:00:00")
+	t.Timer.SetText("00:00:00")
 }
 
 func NewTaskRow() (*Task, *fyne.Container) {
-	// Create the thread-safe data binding
-	strBinding := binding.NewString()
-	strBinding.Set("00:00:00")
-
 	t := &Task{
-		Name:     widget.NewEntry(),
-		TimeData: strBinding,
+		Name:  widget.NewEntry(),
+		Timer: widget.NewLabel("00:00:00"),
 	}
 	t.Name.SetPlaceHolder("Task Name...")
 
 	t.BtnStart = widget.NewButton("▶", func() { t.Toggle() })
 	t.BtnReset = widget.NewButton("↺", func() { t.Reset() })
 
-	// Create label linked to data
-	timerLabel := widget.NewLabelWithData(strBinding)
-	timerLabel.TextStyle = fyne.TextStyle{Monospace: true} // Make numbers line up nicely
-
-	row := container.New(layout.NewBorderLayout(nil, nil, nil, timerLabel),
+	row := container.New(layout.NewBorderLayout(nil, nil, nil, t.Timer),
 		container.NewHBox(t.BtnStart, t.BtnReset),
-		timerLabel,
+		t.Timer,
 		t.Name,
 	)
 
@@ -160,23 +157,19 @@ func NewTaskRow() (*Task, *fyne.Container) {
 // --- MAIN APP ---
 func main() {
 	myApp := app.New()
-	myWindow := myApp.NewWindow("Monitor")
+	myWindow := myApp.NewWindow("Monitor") // This title MUST match the setAlwaysOnTop call
 
 	_, row1 := NewTaskRow()
 	_, row2 := NewTaskRow()
 	_, row3 := NewTaskRow()
 
-	// FIX: Use binding for Battery too
-	batBinding := binding.NewString()
-	batBinding.Set("Loading Battery...")
-	batLabel := widget.NewLabelWithData(batBinding)
+	batLabel := widget.NewLabel("Loading Battery...")
 	batLabel.Alignment = fyne.TextAlignCenter
 	batLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	// FIX: Update binding in background (Thread Safe)
 	go func() {
 		for {
-			batBinding.Set(getWindowsBattery())
+			batLabel.SetText(getWindowsBattery())
 			time.Sleep(5 * time.Second)
 		}
 	}()
@@ -194,6 +187,7 @@ func main() {
 	myWindow.SetFixedSize(true)
 	myWindow.Resize(fyne.NewSize(350, 200))
 
+	// --- FIX: Run the "Always on Top" hack in background ---
 	go setAlwaysOnTop("Monitor")
 
 	myWindow.ShowAndRun()
