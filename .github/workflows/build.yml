@@ -27,7 +27,7 @@ jobs:
       # 4. Run the Cross Compilation
       # This pulls the Docker image and builds the .exe
       - name: Build for Windows
-        run: fyne-cross windows -arch=amd64 -name TengokWaktuLah .
+        run: fyne-cross windows -arch=amd64 -name TengokWaktuLah -appID com.yourdomain.tengokwaktulah .
 
       # 5. Upload the Result
       # Fyne-cross places the output in 'fyne-cross/bin/windows-amd64' by default
