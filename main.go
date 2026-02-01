@@ -30,7 +30,6 @@ var (
 	procGetWindowLongW             = moduser32.NewProc("GetWindowLongW")
 )
 
-// FIX: Define GWL_EXSTYLE as int32 so we can cast it safely later
 const (
 	GWL_EXSTYLE   = -20
 	WS_EX_LAYERED = 0x00080000
@@ -47,16 +46,10 @@ type SYSTEM_POWER_STATUS struct {
 }
 
 func setWindowAlpha(hwnd uintptr, alpha byte) {
-	// 1. Get current window style
-	// Convert GWL_EXSTYLE properly: use variable to avoid constant overflow
 	gwlExStyleInt := int32(GWL_EXSTYLE)
 	gwlExStyle := uintptr(uint32(gwlExStyleInt))
 	style, _, _ := procGetWindowLongW.Call(hwnd, gwlExStyle)
-
-	// 2. Add "Layered" flag (Required for transparency)
 	procSetWindowLongW.Call(hwnd, gwlExStyle, style|uintptr(WS_EX_LAYERED))
-
-	// 3. Set Alpha (0-255)
 	procSetLayeredWindowAttributes.Call(hwnd, 0, uintptr(alpha), uintptr(LWA_ALPHA))
 }
 
@@ -90,7 +83,7 @@ func setAlwaysOnTop(title string) {
 	}
 }
 
-// --- STOPWATCH LOGIC (Unchanged) ---
+// --- STOPWATCH LOGIC ---
 type Task struct {
 	Name        *widget.Entry
 	TimeData    binding.String
@@ -191,6 +184,7 @@ func main() {
 		batLabel,
 	)
 
+	// Simple semi-transparent dark background
 	bgRect := canvas.NewRectangle(color.RGBA{20, 20, 20, 240})
 	finalLayout := container.NewMax(bgRect, uiContent)
 
@@ -198,7 +192,6 @@ func main() {
 	myWindow.SetFixedSize(true)
 	myWindow.Resize(fyne.NewSize(350, 200))
 
-	// Loops
 	go func() {
 		for {
 			batBinding.Set(getWindowsBattery())
@@ -208,7 +201,7 @@ func main() {
 
 	go setAlwaysOnTop("Monitor")
 
-	// FOCUS DETECTOR (Fixed for correct transparency)
+	// Simple focus-based opacity
 	go func() {
 		time.Sleep(1 * time.Second)
 		hwnd := getMyWindowHandle("Monitor")
@@ -218,11 +211,10 @@ func main() {
 			foregroundHwnd, _, _ := procGetForegroundWindow.Call()
 
 			if foregroundHwnd == hwnd {
-				// Focused: Solid (255)
+				// Focused: Solid
 				setWindowAlpha(hwnd, 255)
 			} else {
-				// Unfocused: Semi-Transparent (180 is roughly 70% opacity)
-				// Adjust this value lower (e.g., 100) for more ghost-like effect
+				// Unfocused: Semi-transparent (adjust 180 to your preference)
 				setWindowAlpha(hwnd, 180)
 			}
 		}
