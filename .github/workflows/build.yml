@@ -1,0 +1,33 @@
+name: Build Windows Binary
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Download your code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Run the Fyne Cross Compiler
+      # This compiles your Go code into a Windows .exe using MinGW
+      - name: Build for Windows
+        uses: fyne-io/fyne-cross@v2
+        with:
+          target: windows
+          arch: amd64
+          # If your main file is named 'overlay.go' and not in the root,
+          # or if you want to specify the output name, use 'args':
+          # args: -output MonitorOverlay .
+
+      # 3. Upload the Result so you can download it
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MonitorApp-Windows
+          path: fyne-cross/bin/windows-amd64/
