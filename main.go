@@ -2,19 +2,21 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"syscall"
 	"time"
 	"unsafe"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 )
 
-// --- WINDOWS API SETUP (Unchanged) ---
+// --- WINDOWS API SETUP ---
 var (
 	modkernel32 = syscall.NewLazyDLL("kernel32.dll")
 	moduser32   = syscall.NewLazyDLL("user32.dll")
@@ -22,6 +24,7 @@ var (
 	procGetSystemPowerStatus = modkernel32.NewProc("GetSystemPowerStatus")
 	procFindWindowW          = moduser32.NewProc("FindWindowW")
 	procSetWindowPos         = moduser32.NewProc("SetWindowPos")
+	procGetForegroundWindow  = moduser32.NewProc("GetForegroundWindow") // NEW: Check focus
 )
 
 type SYSTEM_POWER_STATUS struct {
@@ -39,35 +42,37 @@ func getWindowsBattery() string {
 	if ret == 0 {
 		return "Bat: ??"
 	}
-
 	charging := ""
 	if status.ACLineStatus == 1 {
 		charging = "⚡"
 	}
-
 	return fmt.Sprintf("Bat: %d%%%s", status.BatteryLifePercent, charging)
 }
 
+// Returns the HWND (Window Handle) of our app
+func getMyWindowHandle(title string) uintptr {
+	titlePtr, _ := syscall.UTF16PtrFromString(title)
+	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
+	return hwnd
+}
+
+// Force "Always on Top"
 func setAlwaysOnTop(title string) {
 	for i := 0; i < 20; i++ {
 		time.Sleep(200 * time.Millisecond)
-		titlePtr, _ := syscall.UTF16PtrFromString(title)
-		hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
-
+		hwnd := getMyWindowHandle(title)
 		if hwnd != 0 {
-			hwndTopMost := uintptr(^uintptr(0))
-			procSetWindowPos.Call(hwnd, hwndTopMost, 0, 0, 0, 0, 0x0003)
+			// HWND_TOPMOST (-1), SWP_NOMOVE | SWP_NOSIZE (0x0003)
+			procSetWindowPos.Call(hwnd, uintptr(^uintptr(0)), 0, 0, 0, 0, 0x0003)
 			return
 		}
 	}
 }
 
-// --- STOPWATCH LOGIC ---
+// --- STOPWATCH LOGIC (Unchanged) ---
 type Task struct {
-	Name *widget.Entry
-	// We replace the direct Label with a Data Binding
-	TimeData binding.String
-
+	Name        *widget.Entry
+	TimeData    binding.String
 	BtnStart    *widget.Button
 	BtnReset    *widget.Button
 	StartTime   time.Time
@@ -82,13 +87,9 @@ func (t *Task) UpdateLabel() {
 	if t.Running {
 		total += time.Since(t.StartTime)
 	}
-
 	h := int(total.Hours())
 	m := int(total.Minutes()) % 60
 	s := int(total.Seconds()) % 60
-
-	// FIX: Update the data binding, NOT the widget directly
-	// This is thread-safe
 	t.TimeData.Set(fmt.Sprintf("%02d:%02d:%02d", h, m, s))
 }
 
@@ -105,10 +106,8 @@ func (t *Task) Toggle() {
 		t.StartTime = time.Now()
 		t.Running = true
 		t.BtnStart.SetText("⏸")
-
 		t.Ticker = time.NewTicker(1 * time.Second)
 		t.StopChan = make(chan bool)
-
 		go func() {
 			for {
 				select {
@@ -123,47 +122,25 @@ func (t *Task) Toggle() {
 }
 
 func (t *Task) Reset() {
-	if t.Running {
-		t.Toggle()
-	}
+	if t.Running { t.Toggle() }
 	t.Accumulated = 0
 	t.TimeData.Set("00:00:00")
 }
 
 func NewTaskRow() (*Task, *fyne.Container) {
-	// Create the thread-safe data binding
 	strBinding := binding.NewString()
 	strBinding.Set("00:00:00")
-
-	t := &Task{
-		Name:     widget.NewEntry(),
-		TimeData: strBinding,
-	}
+	t := &Task{Name: widget.NewEntry(), TimeData: strBinding}
 	t.Name.SetPlaceHolder("Task Name...")
-
 	t.BtnStart = widget.NewButton("▶", func() { t.Toggle() })
 	t.BtnReset = widget.NewButton("↺", func() { t.Reset() })
 
-	// Create label linked to data
 	timerLabel := widget.NewLabelWithData(strBinding)
 	timerLabel.TextStyle = fyne.TextStyle{Monospace: true}
 
-	// --- LAYOUT FIX ---
-	// 1. Group buttons together
 	buttons := container.NewHBox(t.BtnStart, t.BtnReset)
-
-	// 2. Define Layout: Left=Buttons, Right=Timer
-	// Everything else (the Input) goes to the Center
 	rowLayout := layout.NewBorderLayout(nil, nil, buttons, timerLabel)
-
-	// 3. Create the container
-	// Order matters: Add the border items first, then the center item
-	row := container.New(rowLayout,
-		buttons,    // Left
-		timerLabel, // Right
-		t.Name,     // Center (This will stretch)
-	)
-
+	row := container.New(rowLayout, buttons, timerLabel, t.Name)
 	return t, row
 }
 
@@ -172,26 +149,18 @@ func main() {
 	myApp := app.New()
 	myWindow := myApp.NewWindow("Monitor")
 
+	// 1. Setup UI Content
 	_, row1 := NewTaskRow()
 	_, row2 := NewTaskRow()
 	_, row3 := NewTaskRow()
 
-	// FIX: Use binding for Battery too
 	batBinding := binding.NewString()
-	batBinding.Set("Loading Battery...")
+	batBinding.Set("Loading...")
 	batLabel := widget.NewLabelWithData(batBinding)
 	batLabel.Alignment = fyne.TextAlignCenter
 	batLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	// FIX: Update binding in background (Thread Safe)
-	go func() {
-		for {
-			batBinding.Set(getWindowsBattery())
-			time.Sleep(5 * time.Second)
-		}
-	}()
-
-	content := container.NewVBox(
+	uiContent := container.NewVBox(
 		widget.NewLabel("Start/Stop | Task Name | Timer"),
 		row1,
 		row2,
@@ -200,11 +169,57 @@ func main() {
 		batLabel,
 	)
 
-	myWindow.SetContent(content)
+	// 2. TRANSPARENCY MAGIC
+	// We create a custom background rectangle
+	bgRect := canvas.NewRectangle(color.RGBA{20, 20, 20, 240}) // Start Opaque
+	
+	// We stack the Background BEHIND the UI
+	finalLayout := container.NewMax(bgRect, uiContent)
+
+	myWindow.SetContent(finalLayout)
 	myWindow.SetFixedSize(true)
 	myWindow.Resize(fyne.NewSize(350, 200))
+	
+	// Important: Tell Fyne the window itself has no background
+	myWindow.SetTransparent(true) 
 
+	// 3. Background Loops
+	
+	// A. Battery Updater
+	go func() {
+		for {
+			batBinding.Set(getWindowsBattery())
+			time.Sleep(5 * time.Second)
+		}
+	}()
+
+	// B. Always on Top enforcer
 	go setAlwaysOnTop("Monitor")
+
+	// C. FOCUS DETECTOR (The Acrylic Effect)
+	go func() {
+		// Colors
+		focusedColor := color.RGBA{25, 25, 25, 250}   // Solid-ish Black
+		unfocusedColor := color.RGBA{0, 0, 0, 90}     // Transparent Ghost
+
+		for {
+			time.Sleep(200 * time.Millisecond)
+			
+			// Who is the active window right now?
+			foregroundHwnd, _, _ := procGetForegroundWindow.Call()
+			myHwnd := getMyWindowHandle("Monitor")
+
+			if foregroundHwnd == myHwnd {
+				// We are focused! Be Solid.
+				bgRect.FillColor = focusedColor
+			} else {
+				// We lost focus! Be Ghost.
+				bgRect.FillColor = unfocusedColor
+			}
+			// Redraw the background
+			bgRect.Refresh()
+		}
+	}()
 
 	myWindow.ShowAndRun()
 }
