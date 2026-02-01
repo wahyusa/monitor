@@ -278,7 +278,7 @@ func main() {
 				name, _ := task1Name.Get()
 				if name == "" { name = "Task" }
 				timeStr, _ := task1Time.Get()
-				dateStr := time.Now().Format("Mon, 02 15:04")
+				dateStr := time.Now().Format("Mon, 02 Jan 2006 15:04")
 				miniText.Set(fmt.Sprintf("[ %s %s | %s ]", name, timeStr, dateStr))
 			}
 
@@ -295,4 +295,3 @@ func main() {
 
 	// REMOVED: t1.Toggle() so it doesn't auto-start
 	myWindow.ShowAndRun()
-}
