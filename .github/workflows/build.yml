@@ -14,11 +14,27 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Setup Go (Required to install fyne-cross)
+      # 2.1 Setup Go (Required to install fyne-cross)
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.25' # Use a recent Go version
+          
+       # 2.2 SMART FIX: Align go.mod with the Container's Go Version automatically
+      - name: Align go.mod with fyne-cross
+        run: |
+          # 1. Pull the docker image first so we can check it
+          docker pull fyneio/fyne-cross:base-latest
+          
+          # 2. Ask the container what Go version it runs
+          # Output looks like "go version go1.24.6 linux/amd64" -> we extract "1.24"
+          CONTAINER_GO_VER=$(docker run --rm fyneio/fyne-cross:base-latest go env GOVERSION | sed 's/go//' | cut -d. -f1,2)
+          
+          echo "Container is running Go $CONTAINER_GO_VER. Adapting go.mod..."
+          
+          # 3. Edit go.mod to match
+          go mod edit -go=$CONTAINER_GO_VER
+          go mod tidy
 
       # 3. Install the Fyne Cross Compiler
       - name: Install fyne-cross
