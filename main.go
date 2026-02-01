@@ -21,10 +21,20 @@ var (
 	modkernel32 = syscall.NewLazyDLL("kernel32.dll")
 	moduser32   = syscall.NewLazyDLL("user32.dll")
 
-	procGetSystemPowerStatus = modkernel32.NewProc("GetSystemPowerStatus")
-	procFindWindowW          = moduser32.NewProc("FindWindowW")
-	procSetWindowPos         = moduser32.NewProc("SetWindowPos")
-	procGetForegroundWindow  = moduser32.NewProc("GetForegroundWindow") // NEW: Check focus
+	procGetSystemPowerStatus       = modkernel32.NewProc("GetSystemPowerStatus")
+	procFindWindowW                = moduser32.NewProc("FindWindowW")
+	procSetWindowPos               = moduser32.NewProc("SetWindowPos")
+	procGetForegroundWindow        = moduser32.NewProc("GetForegroundWindow")
+	procSetLayeredWindowAttributes = moduser32.NewProc("SetLayeredWindowAttributes")
+	procSetWindowLongW             = moduser32.NewProc("SetWindowLongW")
+	procGetWindowLongW             = moduser32.NewProc("GetWindowLongW")
+)
+
+// FIX: Define GWL_EXSTYLE as int32 so we can cast it safely later
+const (
+	GWL_EXSTYLE   = -20
+	WS_EX_LAYERED = 0x00080000
+	LWA_ALPHA     = 0x00000002
 )
 
 type SYSTEM_POWER_STATUS struct {
@@ -34,6 +44,20 @@ type SYSTEM_POWER_STATUS struct {
 	SystemStatusFlag    byte
 	BatteryLifeTime     uint32
 	BatteryFullLifeTime uint32
+}
+
+func setWindowAlpha(hwnd uintptr, alpha byte) {
+	// 1. Get current window style
+	// Convert GWL_EXSTYLE properly: use variable to avoid constant overflow
+	gwlExStyleInt := int32(GWL_EXSTYLE)
+	gwlExStyle := uintptr(uint32(gwlExStyleInt))
+	style, _, _ := procGetWindowLongW.Call(hwnd, gwlExStyle)
+
+	// 2. Add "Layered" flag (Required for transparency)
+	procSetWindowLongW.Call(hwnd, gwlExStyle, style|uintptr(WS_EX_LAYERED))
+
+	// 3. Set Alpha (0-255)
+	procSetLayeredWindowAttributes.Call(hwnd, 0, uintptr(alpha), uintptr(LWA_ALPHA))
 }
 
 func getWindowsBattery() string {
@@ -49,20 +73,17 @@ func getWindowsBattery() string {
 	return fmt.Sprintf("Bat: %d%%%s", status.BatteryLifePercent, charging)
 }
 
-// Returns the HWND (Window Handle) of our app
 func getMyWindowHandle(title string) uintptr {
 	titlePtr, _ := syscall.UTF16PtrFromString(title)
 	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
 	return hwnd
 }
 
-// Force "Always on Top"
 func setAlwaysOnTop(title string) {
 	for i := 0; i < 20; i++ {
 		time.Sleep(200 * time.Millisecond)
 		hwnd := getMyWindowHandle(title)
 		if hwnd != 0 {
-			// HWND_TOPMOST (-1), SWP_NOMOVE | SWP_NOSIZE (0x0003)
 			procSetWindowPos.Call(hwnd, uintptr(^uintptr(0)), 0, 0, 0, 0, 0x0003)
 			return
 		}
@@ -122,7 +143,9 @@ func (t *Task) Toggle() {
 }
 
 func (t *Task) Reset() {
-	if t.Running { t.Toggle() }
+	if t.Running {
+		t.Toggle()
+	}
 	t.Accumulated = 0
 	t.TimeData.Set("00:00:00")
 }
@@ -149,7 +172,6 @@ func main() {
 	myApp := app.New()
 	myWindow := myApp.NewWindow("Monitor")
 
-	// 1. Setup UI Content
 	_, row1 := NewTaskRow()
 	_, row2 := NewTaskRow()
 	_, row3 := NewTaskRow()
@@ -169,23 +191,14 @@ func main() {
 		batLabel,
 	)
 
-	// 2. TRANSPARENCY MAGIC
-	// We create a custom background rectangle
-	bgRect := canvas.NewRectangle(color.RGBA{20, 20, 20, 240}) // Start Opaque
-	
-	// We stack the Background BEHIND the UI
+	bgRect := canvas.NewRectangle(color.RGBA{20, 20, 20, 240})
 	finalLayout := container.NewMax(bgRect, uiContent)
 
 	myWindow.SetContent(finalLayout)
 	myWindow.SetFixedSize(true)
 	myWindow.Resize(fyne.NewSize(350, 200))
-	
-	// Important: Tell Fyne the window itself has no background
-	myWindow.SetTransparent(true) 
 
-	// 3. Background Loops
-	
-	// A. Battery Updater
+	// Loops
 	go func() {
 		for {
 			batBinding.Set(getWindowsBattery())
@@ -193,31 +206,25 @@ func main() {
 		}
 	}()
 
-	// B. Always on Top enforcer
 	go setAlwaysOnTop("Monitor")
 
-	// C. FOCUS DETECTOR (The Acrylic Effect)
+	// FOCUS DETECTOR (Fixed for correct transparency)
 	go func() {
-		// Colors
-		focusedColor := color.RGBA{25, 25, 25, 250}   // Solid-ish Black
-		unfocusedColor := color.RGBA{0, 0, 0, 90}     // Transparent Ghost
+		time.Sleep(1 * time.Second)
+		hwnd := getMyWindowHandle("Monitor")
 
 		for {
-			time.Sleep(200 * time.Millisecond)
-			
-			// Who is the active window right now?
+			time.Sleep(100 * time.Millisecond)
 			foregroundHwnd, _, _ := procGetForegroundWindow.Call()
-			myHwnd := getMyWindowHandle("Monitor")
 
-			if foregroundHwnd == myHwnd {
-				// We are focused! Be Solid.
-				bgRect.FillColor = focusedColor
+			if foregroundHwnd == hwnd {
+				// Focused: Solid (255)
+				setWindowAlpha(hwnd, 255)
 			} else {
-				// We lost focus! Be Ghost.
-				bgRect.FillColor = unfocusedColor
+				// Unfocused: Semi-Transparent (180 is roughly 70% opacity)
+				// Adjust this value lower (e.g., 100) for more ghost-like effect
+				setWindowAlpha(hwnd, 180)
 			}
-			// Redraw the background
-			bgRect.Refresh()
 		}
 	}()
 
