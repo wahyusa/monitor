@@ -146,12 +146,22 @@ func NewTaskRow() (*Task, *fyne.Container) {
 
 	// Create label linked to data
 	timerLabel := widget.NewLabelWithData(strBinding)
-	timerLabel.TextStyle = fyne.TextStyle{Monospace: true} // Make numbers line up nicely
+	timerLabel.TextStyle = fyne.TextStyle{Monospace: true}
 
-	row := container.New(layout.NewBorderLayout(nil, nil, nil, timerLabel),
-		container.NewHBox(t.BtnStart, t.BtnReset),
-		timerLabel,
-		t.Name,
+	// --- LAYOUT FIX ---
+	// 1. Group buttons together
+	buttons := container.NewHBox(t.BtnStart, t.BtnReset)
+
+	// 2. Define Layout: Left=Buttons, Right=Timer
+	// Everything else (the Input) goes to the Center
+	rowLayout := layout.NewBorderLayout(nil, nil, buttons, timerLabel)
+
+	// 3. Create the container
+	// Order matters: Add the border items first, then the center item
+	row := container.New(rowLayout,
+		buttons,    // Left
+		timerLabel, // Right
+		t.Name,     // Center (This will stretch)
 	)
 
 	return t, row
