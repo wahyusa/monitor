@@ -17,7 +17,7 @@ jobs:
       # 2. Run the Fyne Cross Compiler
       # This compiles your Go code into a Windows .exe using MinGW
       - name: Build for Windows
-        uses: fyne-io/fyne-cross@v2
+        uses: fyne-io/fyne-cross
         with:
           target: windows
           arch: amd64
